@@ -1,0 +1,22 @@
+
+CompVis/stable-diffusion-v1-4
+
+export MODEL_NAME=../../pretrained/stable-diffusion
+export DATA_DIR=../../data/celebahq
+export ID_NAME=0000
+accelerate launch --multi_gpu --gpu_ids 4,5,6,7 src/diffuser_training.py \
+          --pretrained_model_name_or_path=$MODEL_NAME \
+          --instance_data_dir=$DATA_DIR/id_inpaint/$ID_NAME/ref_image \
+          --class_data_dir=$DATA_DIR/image \
+          --output_dir=$DATA_DIR/custom_diffusion/$ID_NAME  \
+          --with_prior_preservation --real_prior --prior_loss_weight=1.0 \
+          --instance_prompt="The face photo of a <new1> person"  \
+          --class_prompt="person" \
+          --resolution=512  \
+          --train_batch_size=1  \
+          --learning_rate=5e-6  \
+          --lr_warmup_steps=0 \
+          --max_train_steps=750 \
+          --num_class_images=200 \
+          --scale_lr \
+          --modifier_token "<new1>"

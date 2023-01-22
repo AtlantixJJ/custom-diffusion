@@ -215,6 +215,7 @@
 
 import sys
 sys.path.append('./')
+sys.path.append('../diffusers/src')
 import argparse
 import hashlib
 import itertools
@@ -242,6 +243,10 @@ from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
+
+# Modified
+import glob
+import xformers
 
 from src import retrieve
 
@@ -288,16 +293,19 @@ def create_custom_diffusion(unet, freeze_model):
 
         dim = query.shape[-1]
 
-        query = self.reshape_heads_to_batch_dim(query)
-        key = self.reshape_heads_to_batch_dim(key)
-        value = self.reshape_heads_to_batch_dim(value)
+        #query = self.reshape_heads_to_batch_dim(query)
+        #key = self.reshape_heads_to_batch_dim(key)
+        #value = self.reshape_heads_to_batch_dim(value)
+
+        query = self.head_to_batch_dim(query)
+        key = self.head_to_batch_dim(key)
+        value = self.head_to_batch_dim(value)
 
         # TODO(PVP) - mask is currently never used. Remember to re-implement when used
 
         # attention, what we cannot get enough of
         if self._use_memory_efficient_attention_xformers:
-            hidden_states = self._memory_efficient_attention_xformers(query, key, value)
-            # Some versions of xformers return output in fp32, cast it back to the dtype of the input
+            hidden_states = xformers.ops.memory_efficient_attention(query, key, value)
             hidden_states = hidden_states.to(query.dtype)
         else:
             if self._slice_size is None or query.shape[0] // self._slice_size == 1:
@@ -830,14 +838,21 @@ def main(args):
             if not class_images_dir.exists():
                 class_images_dir.mkdir(parents=True, exist_ok=True)
             if args.real_prior:
+                """ # This downloads real images from Internet
                 if accelerator.is_main_process:
                     name = '_'.join(concept['class_prompt'].split())
                     if not Path(os.path.join(class_images_dir, name)).exists() or len(list(Path(os.path.join(class_images_dir, name)).iterdir())) < args.num_class_images:
                         retrieve.retrieve(concept['class_prompt'], class_images_dir, args.num_class_images)
-                concept['class_prompt'] = os.path.join(class_images_dir, f'caption.txt')
-                concept['class_data_dir'] = os.path.join(class_images_dir, f'images.txt')
-                args.concepts_list[i] = concept
                 accelerator.wait_for_everyone()
+                """
+                images = glob.glob(f"{class_images_dir}/*")
+                with open(f"{args.output_dir}/caption.txt", "w") as f:
+                    f.writelines(["The face photo of a person.\n" for _ in images])
+                with open(f"{args.output_dir}/images.txt", "w") as f:
+                    f.writelines([f"{f}\n" for f in images])
+                concept['class_prompt'] = os.path.join(args.output_dir, f'caption.txt')
+                concept['class_data_dir'] = os.path.join(args.output_dir, f'images.txt')
+                args.concepts_list[i] = concept
             else:
                 cur_class_images = len(list(class_images_dir.iterdir()))
 
