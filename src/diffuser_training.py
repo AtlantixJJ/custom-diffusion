@@ -248,8 +248,6 @@ from transformers import AutoTokenizer, PretrainedConfig
 import glob
 import xformers
 
-from src import retrieve
-
 logger = get_logger(__name__)
 
 
@@ -308,10 +306,9 @@ def create_custom_diffusion(unet, freeze_model):
             hidden_states = xformers.ops.memory_efficient_attention(query, key, value)
             hidden_states = hidden_states.to(query.dtype)
         else:
-            if self._slice_size is None or query.shape[0] // self._slice_size == 1:
-                hidden_states = self._attention(query, key, value)
-            else:
-                hidden_states = self._sliced_attention(query, key, value, sequence_length, dim)
+            attention_probs = self.get_attention_scores(query, key)
+            hidden_states = torch.bmm(attention_probs, value)
+            hidden_states = self.batch_to_head_dim(hidden_states)
 
         # linear proj
         hidden_states = self.to_out[0](hidden_states)
@@ -418,6 +415,12 @@ def parse_args(input_args=None):
         default=None,
         required=True,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        default="../../pretrained",
+        help="Path to pretrained model directory.",
     )
     parser.add_argument(
         "--revision",
@@ -798,6 +801,7 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
 
 
 def main(args):
+    os.makedirs(args.output_dir, exist_ok=True)
     logging_dir = Path(args.output_dir, args.logging_dir)
 
     accelerator = Accelerator(
@@ -1250,14 +1254,14 @@ def main(args):
 
     # Create the pipeline using the trained modules and save it.
     if accelerator.is_main_process:
-        pipeline = DiffusionPipeline.from_pretrained(
-            args.pretrained_model_name_or_path,
-            unet=accelerator.unwrap_model(unet),
-            text_encoder=accelerator.unwrap_model(text_encoder),
-            tokenizer=tokenizer,
-            revision=args.revision,
-        )
-        pipeline.save_pretrained(args.output_dir)
+        #pipeline = DiffusionPipeline.from_pretrained(
+        #    args.pretrained_model_name_or_path,
+        #    unet=accelerator.unwrap_model(unet),
+        #    text_encoder=accelerator.unwrap_model(text_encoder),
+        #    tokenizer=tokenizer,
+        #    revision=args.revision,
+        #)
+        #pipeline.save_pretrained(args.output_dir)
         save_path = os.path.join(args.output_dir, "delta.bin")
         save_progress(text_encoder, unet, modifier_token_id, accelerator, args, save_path)
 
