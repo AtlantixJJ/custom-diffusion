@@ -4,7 +4,7 @@ model_name = "../../pretrained/stable-diffusion"
 data_dir = "../../data/celebahq"
 id_names = os.listdir(f"{data_dir}/id_inpaint")
 id_names.sort()
-cmd_format = """accelerate launch --multi_gpu --gpu_ids 4,5 --num_processes=2 \
+cmd_format = """accelerate launch --multi_gpu --gpu_ids 6,7 --num_processes=2 \
 src/diffuser_training.py \
 --pretrained_model_name_or_path={model_name}  \
 --instance_data_dir={data_dir}/id_inpaint/{id_name}/ref_image  \

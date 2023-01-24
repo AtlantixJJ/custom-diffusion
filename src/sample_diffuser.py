@@ -54,8 +54,8 @@ def sample(pipe, delta_ckpt, data_dir, save_prefix,
     for p_name, prompt_temp in PROMPT_TEMPLATES.items():
         prompt = prompt_temp.format(special_token="a <new1> person")
         print(f"=> {prompt}")
-        #images = pipe([prompt] * 5, num_inference_steps=25, guidance_scale=6.)
-        images = pipe([prompt]*5, num_inference_steps=200, guidance_scale=6, eta=1.)
+        images = pipe([prompt] * 5, num_inference_steps=25, guidance_scale=6.)
+        #images = pipe([prompt]*5, num_inference_steps=200, guidance_scale=6, eta=1.)
         images = torch2image(bu(images, (256, 256)).clamp(-1, 1))
         for img in images:
             row_idx, col_idx = count // n_col, count % n_col
