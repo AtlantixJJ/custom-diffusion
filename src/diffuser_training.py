@@ -714,7 +714,7 @@ class CustomDiffusionDataset(Dataset):
             random_scale += 1
 
         if random_scale < 0.6*self.size:
-            add_to_caption = np.random.choice(["a far away ", "very small "])
+            add_to_caption = np.random.choice(["A far away ", "A very small "])
             instance_prompt = add_to_caption + instance_prompt
             cx = np.random.randint(random_scale // 2, self.size - random_scale // 2 + 1)
             cy = np.random.randint(random_scale // 2, self.size - random_scale // 2 + 1)
@@ -729,7 +729,7 @@ class CustomDiffusionDataset(Dataset):
             mask = np.zeros((self.size // 8, self.size // 8))
             mask[(cx - random_scale // 2) // 8 + 1: (cx + random_scale // 2) // 8 - 1, (cy - random_scale // 2) // 8 + 1: (cy + random_scale // 2) // 8 - 1] = 1.
         elif random_scale > self.size:
-            add_to_caption = np.random.choice(["zoomed in ", "close up "])
+            add_to_caption = np.random.choice(["A zoomed in ", "A close up "])
             instance_prompt = add_to_caption + instance_prompt
             cx = np.random.randint(self.size // 2, random_scale - self.size // 2 + 1)
             cy = np.random.randint(self.size // 2, random_scale - self.size // 2 + 1)
