@@ -83,7 +83,7 @@ class FastPersonalizedInpaintPipeline(torch.nn.Module):
     """Learning-based Fast Personalized Inpainting Pipeline."""
 
     PROMPT_TEMPLATES = {
-        "The face photo of {special_token}. {vpt_tokens}",
+        "A face photo of {special_token}. {vpt_tokens}",
     }
 
     def __init__(self,
@@ -485,12 +485,12 @@ class FastPersonalizedInpaintPipeline(torch.nn.Module):
 
     def prepare_for_training(self):
         with torch.no_grad():
-            self.input_ids = self.tokenizer("The face photo of <person>",
+            self.input_ids = self.tokenizer("A face photo of <person>",
                 padding="max_length",
                 truncation=True,
                 max_length=self.tokenizer.model_max_length,
                 return_tensors="pt").input_ids.to(self.device)
-            neg_text_ids = self.tokenizer("The face photo of a person",
+            neg_text_ids = self.tokenizer("TAhe face photo of a person",
                 padding="max_length",
                 truncation=True,
                 max_length=self.tokenizer.model_max_length,

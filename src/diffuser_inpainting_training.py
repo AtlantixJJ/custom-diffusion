@@ -881,7 +881,7 @@ def main(args):
                 """
                 images = glob.glob(f"{class_images_dir}/*")
                 with open(f"{args.output_dir}/caption.txt", "w") as f:
-                    f.writelines(["The face photo of a person.\n" for _ in images])
+                    f.writelines(["A face photo of a person.\n" for _ in images])
                 with open(f"{args.output_dir}/images.txt", "w") as f:
                     f.writelines([f"{f}\n" for f in images])
                 concept['class_prompt'] = os.path.join(args.output_dir, f'caption.txt')

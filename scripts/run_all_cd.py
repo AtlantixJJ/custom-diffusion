@@ -11,8 +11,8 @@ src/diffuser_training.py \
 --class_data_dir={data_dir}/image  \
 --output_dir={data_dir}/custom_diffusion/{id_name}  \
 --with_prior_preservation --real_prior --prior_loss_weight=1.0  \
---instance_prompt="The face photo of a <new1> person"  \
---class_prompt="The face photo of a person"  \
+--instance_prompt="face photo of a <new1> person"  \
+--class_prompt="face photo of a person"  \
 --resolution=512   \
 --train_batch_size=1   \
 --learning_rate=1e-5   \
