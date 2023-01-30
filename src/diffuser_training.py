@@ -849,14 +849,14 @@ def main(args):
                         retrieve.retrieve(concept['class_prompt'], class_images_dir, args.num_class_images)
                 accelerator.wait_for_everyone()
                 """
-                images = glob.glob(f"{class_images_dir}/*")
-                with open(f"{args.output_dir}/caption.txt", "w") as f:
-                    f.writelines(["A face photo of a person.\n" for _ in images])
-                with open(f"{args.output_dir}/images.txt", "w") as f:
-                    f.writelines([f"{f}\n" for f in images])
-                concept['class_prompt'] = os.path.join(args.output_dir, f'caption.txt')
-                concept['class_data_dir'] = os.path.join(args.output_dir, f'images.txt')
-                args.concepts_list[i] = concept
+                #images = glob.glob(f"{class_images_dir}/*")
+                #with open(f"{args.output_dir}/caption.txt", "w") as f:
+                #    f.writelines(["A face photo of a person.\n" for _ in images])
+                #with open(f"{args.output_dir}/images.txt", "w") as f:
+                #    f.writelines([f"{f}\n" for f in images])
+                #concept['class_prompt'] = os.path.join(args.output_dir, f'caption.txt')
+                #concept['class_data_dir'] = os.path.join(args.output_dir, f'images.txt')
+                #args.concepts_list[i] = concept
             else:
                 cur_class_images = len(list(class_images_dir.iterdir()))
 

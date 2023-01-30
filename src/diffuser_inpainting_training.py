@@ -652,6 +652,10 @@ class RandomMaskDataset(torch.utils.data.Dataset):
     def sample(self):
         return self[np.random.randint(0, len(self))]
 
+    def sample_pil(self):
+        i = np.random.randint(0, len(self))
+        return Image.open(self.mask_paths[i])
+
     def __getitem__(self, i):
         img = Image.open(self.mask_paths[i])
         if img.size[0] != self.size[0]:
@@ -724,6 +728,7 @@ class CustomDiffusionDataset(Dataset):
 
     def __getitem__(self, index):
         example = {}
+        iv_mask = self.ds.sample_pil()
         instance_image, instance_prompt = self.instance_images_path[index % self.num_instance_images]
         instance_image = Image.open(instance_image)
         if not instance_image.mode == "RGB":
@@ -752,6 +757,13 @@ class CustomDiffusionDataset(Dataset):
             instance_image =  np.zeros((self.size, self.size,3), dtype=np.float32)
             instance_image[cx - random_scale // 2: cx + random_scale // 2, cy - random_scale // 2: cy + random_scale // 2, :] = instance_image1
 
+            iv_mask1 = iv_mask.resize((random_scale, random_scale), resample=self.interpolation)
+            iv_mask1 = np.array(iv_mask1).astype(np.uint8)
+            iv_mask1 = (iv_mask1 > 127.5).astype(np.float32)
+
+            iv_mask = np.zeros((self.size, self.size,3), dtype=np.float32)
+            iv_mask[cx - random_scale // 2: cx + random_scale // 2, cy - random_scale // 2: cy + random_scale // 2, :] = iv_mask1
+
             mask = np.zeros((self.size // 8, self.size // 8))
             mask[(cx - random_scale // 2) // 8 + 1: (cx + random_scale // 2) // 8 - 1, (cy - random_scale // 2) // 8 + 1: (cy + random_scale // 2) // 8 - 1] = 1.
         elif random_scale > self.size:
@@ -764,16 +776,26 @@ class CustomDiffusionDataset(Dataset):
             instance_image = np.array(instance_image).astype(np.uint8)
             instance_image = (instance_image / 127.5 - 1.0).astype(np.float32)
             instance_image = instance_image[cx - self.size // 2: cx + self.size // 2, cy - self.size // 2: cy + self.size // 2, :]
+
+            iv_mask = iv_mask.resize((random_scale, random_scale), resample=self.interpolation)
+            iv_mask = np.array(iv_mask).astype(np.uint8)
+            iv_mask = (iv_mask > 127.5).astype(np.float32)
+            iv_mask = iv_mask[cx - self.size // 2: cx + self.size // 2, cy - self.size // 2: cy + self.size // 2, :]
+
             mask = np.ones((self.size // 8, self.size // 8))
         else:
             if self.size is not None:
                 instance_image = instance_image.resize((self.size, self.size), resample=self.interpolation)
+                iv_mask = iv_mask.resize((self.size, self.size), resample=self.interpolation)
             instance_image = np.array(instance_image).astype(np.uint8)
             instance_image = (instance_image / 127.5 - 1.0).astype(np.float32)
+            iv_mask = np.array(instance_image).astype(np.uint8)
+            iv_mask = (iv_mask > 127).astype(np.float32)
             mask = np.ones((self.size // 8, self.size // 8))
         ########################################################################
 
-        example["instance_images"] = torch.from_numpy(instance_image).permute(2,0,1)
+        example["instance_images"] = torch.from_numpy(instance_image).permute(2, 0, 1)
+        example["iv_mask"] = iv_mask[:, :, 0].view(1, *iv_mask.shape[:2])
         example["mask"] = torch.from_numpy(mask)
         example["instance_prompt_ids"] = self.tokenizer(
             instance_prompt,
@@ -782,10 +804,6 @@ class CustomDiffusionDataset(Dataset):
             max_length=self.tokenizer.model_max_length,
         ).input_ids
 
-        random_masks = self.mask_ds.sample()
-        example["random_mask"] = random_masks
-        print(example["instance_images"].shape, example["random_mask"].shape)
-
         if self.with_prior_preservation:
             class_image, class_prompt = self.class_images_path[index % self.num_class_images]
             class_image = Image.open(class_image)
@@ -793,6 +811,7 @@ class CustomDiffusionDataset(Dataset):
                 class_image = class_image.convert("RGB")
             example["class_images"] = self.image_transforms(class_image)
             example["class_mask"] = torch.ones_like(example["mask"])
+            example["class_random_mask"] = self.ds.sample()
             example["class_prompt_ids"] = self.tokenizer(
                 class_prompt,
                 padding="do_not_pad",
@@ -1182,10 +1201,12 @@ def main(args):
         if args.train_text_encoder or args.modifier_token is not None:
             text_encoder.train()
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet):
+            with torch.no_grad():
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * 0.18215
+
+            with accelerator.accumulate(unet):
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
@@ -1197,6 +1218,7 @@ def main(args):
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                z_t = torch.cat([noisy_latents, batch["iv_mask"], ])
 
                 # Get the text embedding for conditioning
                 encoder_hidden_states = text_encoder(batch["input_ids"])[0]
