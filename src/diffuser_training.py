@@ -710,9 +710,12 @@ class CustomDiffusionDataset(Dataset):
         else:
             random_scale = np.random.randint(int(1.2*self.size), int(1.4*self.size))
 
+
         if random_scale % 2 == 1:
             random_scale += 1
 
+        random_scale = self.size # don't use augmentation
+        
         if random_scale < 0.6*self.size:
             add_to_caption = np.random.choice(["A far away ", "A very small "])
             instance_prompt = add_to_caption + instance_prompt
@@ -1152,11 +1155,12 @@ def main(args):
         if args.train_text_encoder or args.modifier_token is not None:
             text_encoder.train()
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet):
+            with torch.no_grad():
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * 0.18215
 
+            with accelerator.accumulate(unet):
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]

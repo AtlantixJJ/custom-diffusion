@@ -609,7 +609,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--initializer_token", type=str, default='ktn+pll+ucd', help="A token to use as initializer word."
     )
-    parser.add_argument("--hflip", action="store_true", help="Apply horizontal flip data augmentation.")
+    parser.add_argument("--flip_p", type=float, default=0, help="Apply horizontal flip data augmentation.")
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -677,7 +677,7 @@ class CustomDiffusionDataset(Dataset):
         center_crop=False,
         with_prior_preservation=False,
         num_class_images=200,
-        hflip=False,
+        flip_p=0,
     ):
         self.size = size
         self.center_crop = center_crop
@@ -685,12 +685,17 @@ class CustomDiffusionDataset(Dataset):
         self.interpolation = PIL.Image.BILINEAR
 
         self.ds = RandomMaskDataset(size=(size, size))
+        # hardcoded temporarily
+        self.inpaint_region = ["lowerface", "eyebrow"]
+        self.bboxes = torch.load(f"../../data/celebahq/annotation/region_bbox.pth")["bboxes"]
 
         self.instance_images_path = []
         self.class_images_path = []
         self.with_prior_preservation = with_prior_preservation
         for concept in concepts_list:
             inst_img_path = [(x, concept["instance_prompt"]) for x in Path(concept["instance_data_dir"]).iterdir() if x.is_file()]
+            inst_names = [str(s[0]) for s in inst_img_path]
+            inst_names = [s[s.rfind("/") + 1 : -4] for s in inst_names]
             self.instance_images_path.extend(inst_img_path)
 
             if with_prior_preservation:
@@ -704,18 +709,19 @@ class CustomDiffusionDataset(Dataset):
                     with open(concept["class_prompt"], "r") as f:
                         class_prompt = f.read().splitlines()
 
-                class_img_path = [(x, y) for (x,y) in zip(class_images_path,class_prompt)]
+                class_img_path = [(x, y) for (x,y) in zip(class_images_path, class_prompt)]
+                exclude_inst = lambda x: x[0][x[0].rfind("/") + 1 : -4] not in inst_names
+                class_img_path = list(filter(exclude_inst, class_img_path))
                 self.class_images_path.extend(class_img_path[:num_class_images])
 
         random.shuffle(self.instance_images_path)
         self.num_instance_images = len(self.instance_images_path)
         self.num_class_images = len(self.class_images_path)
         self._length = max(self.num_class_images, self.num_instance_images)
-        self.flip = transforms.RandomHorizontalFlip(0.5 * hflip)
+        self.flip_p = flip_p
 
         self.image_transforms = transforms.Compose(
             [
-                self.flip,
                 transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR),
                 transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
                 transforms.ToTensor(),
@@ -726,14 +732,28 @@ class CustomDiffusionDataset(Dataset):
     def __len__(self):
         return self._length
 
+    def get_mask(self, image_path, orig_size):
+        random_mask = self.ds.sample()[None, ..., 0]
+        rname = np.random.choice(self.inpaint_region, (1,))[0]
+        image_path = str(image_path)
+        gidx = int(image_path[image_path.rfind("/") + 1 : -4])
+        self.bboxes[rname][gidx]
+        iv_mask = torch.zeros(1, self.size, self.size)
+        scale = float(self.size) / orig_size 
+        x_min, y_min, x_max, y_max = (self.bboxes[rname][gidx] * scale).long()
+        iv_mask[..., x_min:x_max, y_min:y_max].fill_(1)
+        iv_mask = (iv_mask + random_mask).clamp(min=0, max=1)
+        return iv_mask
+
     def __getitem__(self, index):
         example = {}
-        iv_mask = self.ds.sample_pil()
-        instance_image, instance_prompt = self.instance_images_path[index % self.num_instance_images]
-        instance_image = Image.open(instance_image)
+
+        image_path, instance_prompt = self.instance_images_path[index % self.num_instance_images]
+        instance_image = Image.open(image_path)
         if not instance_image.mode == "RGB":
             instance_image = instance_image.convert("RGB")
-        instance_image = self.flip(instance_image)
+        orig_size = instance_image.size[0]
+        iv_mask = self.get_mask(image_path, orig_size)
 
         #### apply augmentation and create a valid image regions mask ####
         if np.random.randint(0, 3) < 2:
@@ -744,8 +764,10 @@ class CustomDiffusionDataset(Dataset):
         if random_scale % 2 == 1:
             random_scale += 1
 
+        random_scale = self.size # don't use augmentation
+        
         if random_scale < 0.6*self.size:
-            add_to_caption = np.random.choice(["a far away ", "very small "])
+            add_to_caption = np.random.choice(["A far away ", "A very small "])
             instance_prompt = add_to_caption + instance_prompt
             cx = np.random.randint(random_scale // 2, self.size - random_scale // 2 + 1)
             cy = np.random.randint(random_scale // 2, self.size - random_scale // 2 + 1)
@@ -767,7 +789,7 @@ class CustomDiffusionDataset(Dataset):
             mask = np.zeros((self.size // 8, self.size // 8))
             mask[(cx - random_scale // 2) // 8 + 1: (cx + random_scale // 2) // 8 - 1, (cy - random_scale // 2) // 8 + 1: (cy + random_scale // 2) // 8 - 1] = 1.
         elif random_scale > self.size:
-            add_to_caption = np.random.choice(["zoomed in ", "close up "])
+            add_to_caption = np.random.choice(["A zoomed in ", "A close up "])
             instance_prompt = add_to_caption + instance_prompt
             cx = np.random.randint(self.size // 2, random_scale - self.size // 2 + 1)
             cy = np.random.randint(self.size // 2, random_scale - self.size // 2 + 1)
@@ -786,37 +808,44 @@ class CustomDiffusionDataset(Dataset):
         else:
             if self.size is not None:
                 instance_image = instance_image.resize((self.size, self.size), resample=self.interpolation)
-                iv_mask = iv_mask.resize((self.size, self.size), resample=self.interpolation)
+                iv_mask = F.interpolate(iv_mask.unsqueeze(0), (self.size, self.size), mode="nearest")[0]
             instance_image = np.array(instance_image).astype(np.uint8)
             instance_image = (instance_image / 127.5 - 1.0).astype(np.float32)
-            iv_mask = np.array(instance_image).astype(np.uint8)
-            iv_mask = (iv_mask > 127).astype(np.float32)
             mask = np.ones((self.size // 8, self.size // 8))
         ########################################################################
 
-        example["instance_images"] = torch.from_numpy(instance_image).permute(2, 0, 1)
-        example["iv_mask"] = iv_mask[:, :, 0].view(1, *iv_mask.shape[:2])
+        instance_image = torch.from_numpy(instance_image).permute(2, 0, 1)
+        if np.random.rand() < self.flip_p:
+            instance_image = torch.flip(instance_image, (2,))
+            iv_mask = torch.flip(iv_mask, (2,))
+        example["instance_images"] = instance_image
+        example["iv_mask"] = iv_mask
         example["mask"] = torch.from_numpy(mask)
         example["instance_prompt_ids"] = self.tokenizer(
             instance_prompt,
-            padding="do_not_pad",
+            padding="max_length",
             truncation=True,
             max_length=self.tokenizer.model_max_length,
+            return_tensors="pt"
         ).input_ids
 
         if self.with_prior_preservation:
-            class_image, class_prompt = self.class_images_path[index % self.num_class_images]
-            class_image = Image.open(class_image)
-            if not class_image.mode == "RGB":
-                class_image = class_image.convert("RGB")
-            example["class_images"] = self.image_transforms(class_image)
-            example["class_mask"] = torch.ones_like(example["mask"])
-            example["class_random_mask"] = self.ds.sample()
+            image_path, class_prompt = self.class_images_path[index % self.num_class_images]
+            class_image = Image.open(image_path).convert("RGB")
+            class_image = self.image_transforms(class_image)
+            class_mask = self.get_mask(image_path, orig_size)
+            if np.random.rand() < self.flip_p:
+                class_image = torch.flip(class_image, (2,))
+                class_mask = torch.flip(class_mask, (2,))
+            example["class_images"] = class_image
+            example["class_mask"] = torch.ones_like(class_image)
+            example["class_iv_mask"] = class_mask
             example["class_prompt_ids"] = self.tokenizer(
                 class_prompt,
-                padding="do_not_pad",
+                padding="max_length",
                 truncation=True,
                 max_length=self.tokenizer.model_max_length,
+                return_tensors="pt"
             ).input_ids
 
         return example
@@ -849,7 +878,10 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
         return f"{organization}/{model_id}"
 
 
-def main(args):
+#def main(args):
+if __name__ == "__main__":
+    args = parse_args()
+
     os.makedirs(args.output_dir, exist_ok=True)
     logging_dir = Path(args.output_dir, args.logging_dir)
 
@@ -898,14 +930,14 @@ def main(args):
                         retrieve.retrieve(concept['class_prompt'], class_images_dir, args.num_class_images)
                 accelerator.wait_for_everyone()
                 """
-                images = glob.glob(f"{class_images_dir}/*")
-                with open(f"{args.output_dir}/caption.txt", "w") as f:
-                    f.writelines(["A face photo of a person.\n" for _ in images])
-                with open(f"{args.output_dir}/images.txt", "w") as f:
-                    f.writelines([f"{f}\n" for f in images])
-                concept['class_prompt'] = os.path.join(args.output_dir, f'caption.txt')
-                concept['class_data_dir'] = os.path.join(args.output_dir, f'images.txt')
-                args.concepts_list[i] = concept
+                #images = glob.glob(f"{class_images_dir}/*")
+                #with open(f"{args.output_dir}/caption.txt", "w") as f:
+                #    f.writelines(["A face photo of a person.\n" for _ in images])
+                #with open(f"{args.output_dir}/images.txt", "w") as f:
+                #    f.writelines([f"{f}\n" for f in images])
+                #concept['class_prompt'] = os.path.join(args.output_dir, f'caption.txt')
+                #concept['class_data_dir'] = os.path.join(args.output_dir, f'images.txt')
+                #args.concepts_list[i] = concept
             else:
                 cur_class_images = len(list(class_images_dir.iterdir()))
 
@@ -1094,7 +1126,7 @@ def main(args):
         size=args.resolution,
         center_crop=args.center_crop,
         num_class_images=args.num_class_images,
-        hflip=args.hflip
+        flip_p=args.flip_p
     )
 
     def collate_fn(examples):
@@ -1128,7 +1160,8 @@ def main(args):
         return batch
 
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn, num_workers=1
+        train_dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=1,
+        #collate_fn=collate_fn,
     )
 
 
@@ -1195,6 +1228,8 @@ def main(args):
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     global_step = 0
+    B = args.train_batch_size
+    T = noise_scheduler.config.num_train_timesteps
 
     for epoch in range(args.num_train_epochs):
         unet.train()
@@ -1203,51 +1238,56 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with torch.no_grad():
                 # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
-                latents = latents * 0.18215
+                inst_image, prior_image = batch["instance_images"], batch["class_images"]
+                inst_mask, prior_mask = batch["iv_mask"], batch["class_iv_mask"]
+                masked_inst_image = inst_image * (1 - inst_mask)
+                masked_class_mask = prior_image * (1 - prior_mask)
+                vae_in = torch.cat([inst_image, prior_image,
+                    masked_inst_image, masked_class_mask], 0).to(weight_dtype)
+                vae_out = 0.18215 * vae.encode(vae_in).latent_dist.sample()
+                gt_latent = vae_out[: 2 * B] # inst, prior
+                masked_latent = vae_out[2 * B :] # inst, prior
+                noise = torch.randn_like(gt_latent)
+                timesteps = torch.randint(0, T, (2 * B,), device=vae_in.device).long()
+                noisy_latent = noise_scheduler.add_noise(
+                    gt_latent, noise, timesteps)
+                mask = torch.cat([inst_mask, prior_mask], 0)
+                smask = F.interpolate(mask, gt_latent.shape[2:])
+                x_in = torch.cat([noisy_latent, smask, masked_latent], 1)
+                comb_ids = torch.cat([batch["instance_prompt_ids"][0],
+                                      batch["class_prompt_ids"][0]], 0)
 
             with accelerator.accumulate(unet):
-
-                # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents)
-                bsz = latents.shape[0]
-                # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
-                timesteps = timesteps.long()
-
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-                z_t = torch.cat([noisy_latents, batch["iv_mask"], ])
-
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                text_feat = text_encoder(comb_ids)[0]
 
                 # Predict the noise residual
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                model_pred = unet(x_in, timesteps, text_feat).sample
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
+                    target = noise_scheduler.get_velocity(
+                        noisy_latent, noise, timesteps)
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                 if args.with_prior_preservation:
-                    # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
-                    model_pred, model_pred_prior = torch.chunk(model_pred, 2, dim=0)
-                    target, target_prior = torch.chunk(target, 2, dim=0)
-                    mask = torch.chunk(batch["mask"], 2, dim=0)[0]
+                    model_pred_inst, model_pred_prior = model_pred[:B], model_pred[B:]
+                    target_inst, target_prior = target[:B], target[B:]
+
                     # Compute instance loss
-                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
-                    loss = ((loss*mask).sum([1, 2, 3])/mask.sum([1, 2, 3])).mean()
+                    target_dsm_loss = torch.square(model_pred_inst.float()
+                        - target_inst.float()).mean([1, 2, 3])
 
                     # Compute prior loss
-                    prior_loss = F.mse_loss(model_pred_prior.float(), target_prior.float(), reduction="mean")
+                    prior_dsm_loss = torch.square(model_pred_prior.float()
+                        - target_prior.float()).mean([1, 2, 3])
 
                     # Add the prior loss to the instance loss.
-                    loss = loss + args.prior_loss_weight * prior_loss
+                    loss = target_dsm_loss.mean() + \
+                        args.prior_loss_weight * prior_dsm_loss.mean()
                 else:
                     mask = batch["mask"]
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
@@ -1322,7 +1362,7 @@ def main(args):
 
     accelerator.end_training()
 
-if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+#if __name__ == "__main__":
+#    args = parse_args()
+#    main(args)
 

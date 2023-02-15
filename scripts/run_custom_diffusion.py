@@ -13,6 +13,7 @@ src/diffuser_training.py \
 --instance_prompt="photo of a <new1> person"  \
 --class_data_dir={data_dir}/annotation/dialog/class_images.txt  \
 --class_prompt={data_dir}/annotation/dialog/class_prompts.txt  \
+--hflip \
 --resolution=512   \
 --train_batch_size=1   \
 --gradient_accumulation_steps 4 \
