@@ -46,6 +46,9 @@ if __name__ == "__main__":
     parser.add_argument("--result-dir2", type=str,
         default="../../data/celebahq/SDI_CD_stacked",
         help="Path to the experiment directory.")
+    parser.add_argument("--cache-dir", type=str,
+        default="../../pretrained",
+        help="Path to the cache dir of diffusers")
     parser.add_argument("--expr-dir", type=str,
         default="../../data/celebahq/custom_diffusion_inpaint/0000",
         help="Path to the experiment directory.")
@@ -69,7 +72,7 @@ if __name__ == "__main__":
     scheduler = diffusers.DDIMScheduler.from_config(
         args.model_path, subfolder="scheduler")
     pipe = diffusers.StableDiffusionInpaintPipeline.from_pretrained(
-        args.model_path, safety_checker=None, scheduler=scheduler)
+        args.model_path, safety_checker=None, scheduler=scheduler, cache_dir=args.cache_dir)
     pipe = pipe.to("cuda")
 
     delta_path = f"{args.expr_dir}/delta.bin"
@@ -98,7 +101,7 @@ if __name__ == "__main__":
                 p_img = generate_given_prompt(pipe,
                     prompt,
                     masked_image, mask, args.guidance_scale,
-                    negative_prompt=prompt.format(special_token="a person"),
+                    negative_prompt=None,#prompt.format(special_token="a person"),
                     seed=1997)
                 small_mask_image = F.interpolate(masked_image, (256, 256), mode="bilinear")
                 vutils.save_image(p_img, f"{args.result_dir1}/{id_idx}_{n}_{j}.png")
