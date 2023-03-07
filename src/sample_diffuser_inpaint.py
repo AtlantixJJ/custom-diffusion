@@ -81,28 +81,30 @@ if __name__ == "__main__":
 
     person_id = int(args.expr_dir[args.expr_dir.rfind("/")+1:])
     test_ds = CelebAHQIDIDataset(size=(512, 512),
-        split="all", loop_data="identity", single_id=person_id)
+        split="all", loop_data="identity", single_id=person_id,
+        inpaint_region=["lowerface", "eyebrow", "wholeface"])
     batch = test_ds[0]
 
     prompt_temps = PROMPT_TEMPLATES_SMALL if args.prompt_set == "small" \
         else PROMPT_TEMPLATES_CONTROL
     vutils.save_image(batch["ref_image"], f"{args.expr_dir}/inv_gen/reference.png")
-    for p_i, (pname, prompt_temp) in enumerate(prompt_temps.items()):
+    for p_i, (p_name, prompt_temp) in enumerate(prompt_temps.items()):
         prompt = prompt_temp.format("a <new1> person")
         print(f"=> ({p_i}/{len(prompt_temps)}) {prompt}")
         col_imgs = []
         for i, image in enumerate(batch["infer_image"]):
             id_idx = batch["id"]
-            n = batch["all_indice"][i]
+            image_idx = batch["all_indice"][i]
             image = image.unsqueeze(0).cuda()
-            for j, mask in enumerate(batch["infer_mask"][i]):
+            for mask_idx, mask in enumerate(batch["infer_mask"][i]):
                 mask = mask[None, :1].cuda()
                 masked_image = (image * 2 - 1).cuda() * (1 - mask)
                 p_img = generate_given_prompt(pipe,
                     prompt,
                     masked_image, mask, args.guidance_scale,
-                    negative_prompt=None,#prompt.format(special_token="a person"),
+                    negative_prompt=None,
                     seed=1997)
-                small_mask_image = F.interpolate(masked_image, (256, 256), mode="bilinear")
-                vutils.save_image(p_img, f"{args.result_dir1}/{id_idx}_{n}_{j}.png")
-            vutils.save_image(image, f"{args.expr_dir}/inv_gen/{n}_gt.png")
+                name = f"{id_idx}_{image_idx}_{mask_idx}.png"
+                if args.prompt_set == "control":
+                    name = f"{id_idx}_{image_idx}_{mask_idx}_{p_name}.png"
+                vutils.save_image(p_img, f"{args.result_dir1}/{name}.png")

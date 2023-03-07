@@ -1,22 +1,28 @@
 """Datasets."""
 import torch, glob, json, os
-from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+from torchvision.transforms import Compose, Resize, ToTensor, Normalize, RandomHorizontalFlip
 import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 
 
 PROMPT_TEMPLATES_LARGE = {
-    "1": "a photo of {}",
-    "2": "a photo of the {}",
-    "3": "a good photo of {}",
-    "4": "a cropped photo of {}",
-    "5": "a close-up photo of {}",
-    "6": "a bright photo of {}",
-    "7": "a face photo of {}",
-    "8": "a face photo of the {}",
-    "9": "a face photo of cool {}",
-    "10": "a beautiful face photo of {}",
+    "1": "A photo of {}",
+    "2": "A photo of the {}",
+    "3": "A good photo of {}",
+    "4": "A cropped photo of {}",
+    "5": "A close-up photo of {}",
+    "6": "A bright photo of {}",
+    "7": "A face photo of {}",
+    "8": "The beautiful face photo of {}",
+    "9": "The photo of {}",
+    "10": "The photo of the {}",
+    "11": "The good photo of {}",
+    "12": "The cropped photo of {}",
+    "13": "The close-up photo of {}",
+    "14": "The bright photo of {}",
+    "15": "The face photo of {}",
+    "16": "The beautiful face photo of {}",
 }
 
 
@@ -24,13 +30,107 @@ PROMPT_TEMPLATES_MEDIUM = {
     "person": "A face photo of {}",
     "smile": "A face photo of {}, simling",
     "sad": "A face photo of {}, feeling sad",
-    "eyeglass": "A face photo of {}, wearing eyeglasses"
+    "eyeglass": "A face photo of {}, wearing eyeglasses",
 }
+
+#"joker": "photo of {}, has a joker nose",
+#"red_eye": "photo of {}, red eyes",
+#"duck": "photo of {}, making a duck face",
+#"open_mouth": "photo of {}, mouth open",
+
+PROMPT_TEMPLATES_CONTROL = {
+    #"person": "photo of {}",
+
+    "laughing": "photo of {}, laughing",
+    "serious": "photo of {}, serious",
+    "smile": "photo of {}, smiling",
+    "sad": "photo of {}, looking sad",
+    "angry": "photo of {}, angry",
+    "surprised": "photo of {}, surprised",
+    "beard": "photo of {}, has beard",
+    
+    "makeup": "photo of {}, with heavy makeup",
+    "lipstick": "photo of {}, wearing lipstick",
+    "funny": "photo of {}, making a funny face",
+    "tongue": "photo of {}, putting the tongue out",
+
+    "singing": "photo of {}, singing with a microphone",
+    "cigarette": "photo of {}, smoking, has a cigarette",
+
+    "eyeglass": "photo of {}, wearing eyeglasses",
+    "sunglasses": "photo of {}, wearing sunglasses",
+}
+
 
 PROMPT_TEMPLATES_SMALL = {
-    "person": "A face photo of {}"
+    "person": "photo of {}"
 }
 
+
+def name2idx(names):
+    """Possible names: <num>_*[.jpg][.png] or <num>[.jpg][.png]."""
+    return [int(n[:-4].split("_")[0]) for n in names]
+
+
+class MyStyleDataset(torch.utils.data.Dataset):
+    """Load the images of MyStyle dataset"""
+
+    def __init__(self, data_dir="../../data/MyStyle", size=(512, 512),
+                 flip_p=0, num_ref=5, seed=None,
+                 infer_folder="train", ref_folder="test", mask_folder="test_mask"):
+        self.data_dir = data_dir
+        self.num_ref = num_ref
+        self.size = size
+        self.flip_p = flip_p
+        self.infer_folder = infer_folder
+        self.ref_folder = ref_folder
+        self.mask_folder = mask_folder
+        self.transform = Compose([Resize(size), ToTensor()])
+        self.mask_ds = RandomMaskDataset(size=self.size)
+        self.ids = [int(i) for i in os.listdir(data_dir)]
+        self.ids.sort()
+        self.rng = np.random.RandomState(seed)
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, id_idx):
+        read_pil = lambda fp: Image.open(open(fp, "rb"))
+
+        id_dir = os.path.join(self.data_dir, f"{id_idx:04d}")
+
+        infer_paths = glob.glob(f"{id_dir}/{self.infer_folder}/*")
+        infer_paths.sort()
+        #infer_mask_paths = glob.glob(f"{id_dir}/{self.mask_folder}/*.png")
+        #infer_mask_paths.sort()
+        ref_file_path = os.path.join(id_dir, "ref.txt")
+        if os.path.exists(ref_file_path):
+            with open(ref_file_path, "r") as f:
+                ref_paths = [os.path.join(id_dir, self.ref_folder, f.strip())
+                             for f in f.readlines()][:self.num_ref]
+        else:
+            ref_paths = glob.glob(f"{id_dir}/ref_image/p*.jpg")
+            ref_paths.sort()
+            ref_paths = ref_paths[:self.num_ref]
+        random_masks = torch.stack([self.mask_ds.sample(self.rng)
+                                    for _ in infer_paths])
+        # load and preprocess the image
+        iv_imgs = torch.stack([self.transform(read_pil(fp))
+                               for fp in infer_paths])
+        rv_imgs = torch.stack([self.transform(read_pil(fp))
+                               for fp in ref_paths])
+        #mask = torch.stack([self.transform(read_pil(fp))[:1]
+        #                    for fp in infer_mask_paths])
+        #mask = (mask > 0.5).float()
+        num = iv_imgs.shape[0] + rv_imgs.shape[0]
+        temps = ["photo of {}" for _ in range(num)]
+        return {"infer_image": iv_imgs,
+                "ref_image": rv_imgs,
+                #"infer_mask": mask.unsqueeze(1),
+                "random_mask": random_masks,
+                "all_indice": list(range(num)),
+                "prompt_template": temps,
+                "id": id_idx}
 
 
 class RandomMaskDataset(torch.utils.data.Dataset):
@@ -47,8 +147,12 @@ class RandomMaskDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.mask_paths)
     
-    def sample(self):
-        return self[np.random.randint(0, len(self))]
+    def sample(self, rng=None):
+        if rng is None:
+            idx = np.random.randint(0, len(self))
+        else:
+            idx = rng.randint(0, len(self))
+        return self[idx]
 
     def __getitem__(self, i):
         img = Image.open(self.mask_paths[i])
@@ -69,27 +173,55 @@ class CelebAHQIDIDataset(torch.utils.data.Dataset):
             image-all: all images are masked once, reference selected from both infer and ref.
         single_id: only return data of a single id. For compatibility with Textual Inversion.
     """
-    def __init__(self, data_dir="../../data/celebahq",
+    def __init__(self, data_dir="../../data/celebahq", split="train",
                  image_folder="image", ann_folder="annotation",
-                 size=(256, 256), num_ref=5,
-                 inpaint_region=["lowerface", "eyebrow"],
-                 split="train", loop_data="identity", single_id=None):
-        self.loop_data = loop_data
-        self.single_id = single_id
+                 random_mask_dir="../../data/celebahq/mask",
+                 num_ref=5, size=(512, 512), flip_p=0, use_caption=True,
+                 inpaint_region=["lowerface", "eyebrow", "wholeface"], 
+                 loop_data="identity", single_id=None, seed=None):
         self.data_dir = data_dir
+        self.split = split
         self.image_folder = image_folder
         self.ann_folder = ann_folder
-        self.size = size
+        self.random_mask_dir = random_mask_dir
         self.num_ref = num_ref
+        self.size = size
+        self.flip_p = flip_p
+        self.use_caption = use_caption
+        self.loop_data = loop_data
+        self.single_id = single_id
         self.inpaint_regions = inpaint_region
         if type(inpaint_region) is str:
             self.inpaint_regions = [inpaint_region]
         self.num_mask = len(self.inpaint_regions)
-        self.split = split
+        self.rng = np.random.RandomState(seed)
+        
         self.transform = Compose([Resize(size), ToTensor()])
         self.bboxes = torch.load(f"{data_dir}/{ann_folder}/region_bbox.pth")["bboxes"]
-        ann_path = f"{data_dir}/{ann_folder}/celebahq-idi-{num_ref}.json"
+        n_images = self.bboxes[inpaint_region[0]].shape[0]
+        ann_path = f"{data_dir}/{ann_folder}/idi-{num_ref}.json"
         self.ann = json.load(open(ann_path, "r"))
+
+        if os.path.exists(random_mask_dir):
+            self.mask_ds = RandomMaskDataset(
+                data_dir=random_mask_dir, size=self.size)
+        else:
+            self.mask_ds = None
+        
+        self.prompt_templates = PROMPT_TEMPLATES_SMALL #PROMPT_TEMPLATES_LARGE
+        self.prepend_text = "A face photo of {}. "
+        
+        if use_caption:
+            caption_path = f"{data_dir}/{ann_folder}/dialog/captions_hq.json"
+            caption_dict = json.load(open(caption_path, "r"))
+            self.captions = [] # The caption misses on 5380.jpg
+            for n in [f"{i}.jpg" for i in range(n_images)]:
+                text = self.prepend_text
+                if n in caption_dict:
+                    text = text + caption_dict[n]["overall_caption"]
+                self.captions.append(text)
+        else:
+            self.captions = [self.prepend_text] * n_images
         self._create_loop_list()
 
     def _create_loop_list(self):
@@ -98,10 +230,10 @@ class CelebAHQIDIDataset(torch.utils.data.Dataset):
         for k in split_names:
             self.ann["all_ids"] += self.ann[f"{k}_ids"]
         self.ann["all_ids"].sort()
-        
+        self.ids = self.ann[f"{self.split}_ids"]
         if self.loop_data == "identity":
-            self.ids = self.ann[f"{self.split}_ids"]
             if self.single_id is not None:
+                #self.ids = [self.ids[self.single_id]]
                 self.ids = [self.single_id]
         elif "image" in self.loop_data:
             key = self.loop_data.split("-")[1] # total, infer, ref
@@ -110,8 +242,11 @@ class CelebAHQIDIDataset(torch.utils.data.Dataset):
                 self.ann["all_images"][key] += self.ann[f"{k}_images"][key]
             self.image_indices = self.ann[f"{self.split}_images"][key]
             if self.single_id is not None:
-                self.this_id = int(self.single_id)
-                self.image_indices = self.ann["id2image"][str(self.this_id)][key]
+                self.this_id = self.single_id
+                #self.this_id = self.ids[self.single_id]
+                m = self.ann["id2image"][self.this_id]
+                all_indices = m["infer"] + m["ref"]
+                self.image_indices = all_indices if key == "all" else m[key]
 
     def __len__(self):
         if self.loop_data == "identity":
@@ -119,103 +254,89 @@ class CelebAHQIDIDataset(torch.utils.data.Dataset):
         elif "image" in self.loop_data:
             return len(self.image_indices)
 
-    def _read_pil(self, fname):
-        fpath = f"{self.data_dir}/image/{fname}.jpg"
-        return Image.open(open(fpath, "rb"))
+    def _read_pil(self, fp):
+        fpath = os.path.join(self.data_dir, self.image_folder, fp)
+        return Image.open(open(fpath, "rb")).convert("RGB")
 
     def _fetch_id(self, index):
         if self.loop_data == "identity":
-            id_idx = self.ids[index]
-            id_ann = self.ann["id2image"][str(self.ids[index])]
-            iv_indices, rv_indices = id_ann["infer"], id_ann["ref"]
+            id_name = self.ids[index]
+            id_ann = self.ann["id2image"][self.ids[index]]
+            iv_files, rv_files = id_ann["infer"], id_ann["ref"]
         elif "image" in self.loop_data:
-            image_idx = self.image_indices[index]
-            id_idx = self.ann["image2id"][image_idx]
-            id_ann = self.ann["id2image"][str(id_idx)]
-            iv_indices = [image_idx]
+            image_name = self.image_indices[index]
+            id_name = self.ann["image2id"][name2idx([image_name])[0]]
+            id_ann = self.ann["id2image"][id_name]
+            iv_files = [image_name]
             if self.loop_data == "image-ref":
-                rv_indices = [i for i in id_ann["ref"] if i != image_idx]
+                rv_files = [f for f in id_ann["ref"] if f != image_name]
             elif self.loop_data == "image-infer":
-                rv_indices = id_ann["ref"]
+                rv_files = id_ann["ref"]
             elif self.loop_data == "image-all":
-                all_indices = id_ann["infer"] + id_ann["ref"]
-                other_indices = [i for i in all_indices if i != image_idx]
-                rv_indices = list(np.random.choice(
-                    other_indices, (self.num_ref,), replace=False))
+                all_files = id_ann["infer"] + id_ann["ref"]
+                other_files = [f for f in all_files if f != image_name]
+                rv_files = list(np.random.choice(
+                    other_files, (self.num_ref,), replace=False))
             else:
                 raise NotImplementedError
-        return iv_indices, rv_indices, id_idx
+        return iv_files, rv_files, id_name
+
+    def _sample_prompt_temp(self, i):
+        """Sample prompt template"""
+        rand_temp = np.random.choice(list(self.prompt_templates.values()))
+        if not self.use_caption or np.random.rand() < 0.5:
+            return rand_temp
+        return self.captions[i]
 
     def __getitem__(self, index):
-        iv_indices, rv_indices, id_idx = self._fetch_id(index)
+        iv_files, rv_files, id_idx = self._fetch_id(index)
+        # sometimes training pipeline samples according to the order of
+        # rv_files, so shuffle here
+        self.rng.shuffle(rv_files)
+        iv_indices = name2idx(iv_files)
+        rv_indices = name2idx(rv_files)
+        all_files = iv_files + rv_files
+        all_indices = iv_indices + rv_indices
+        #print(all_files, all_indices)
+
         # load and preprocess the image
-        iv_imgs = [self._read_pil(i) for i in iv_indices]
-        rv_imgs = [self._read_pil(i) for i in rv_indices]
+        iv_imgs = [self._read_pil(fp) for fp in iv_files]
+        rv_imgs = [self._read_pil(fp) for fp in rv_files]
         orig_size = iv_imgs[0].size[0]
         scale = float(self.size[0]) / orig_size
         iv_imgs = torch.stack([self.transform(img) for img in iv_imgs])
         rv_imgs = torch.stack([self.transform(img) for img in rv_imgs])
-        mask = torch.zeros(len(iv_indices), self.num_mask, *iv_imgs.shape[1:])
+        mask = torch.zeros(len(iv_files), self.num_mask, *iv_imgs.shape[1:])
         for i, gidx in enumerate(iv_indices):
             # obtain and scale the bbox
             for j, rname in enumerate(self.inpaint_regions):
                 x_min, y_min, x_max, y_max = (self.bboxes[rname][gidx] * scale).long()
                 mask[i, j, :, x_min:x_max, y_min:y_max].fill_(1)
+        for i in range(len(iv_imgs)):
+            if self.rng.rand() < self.flip_p:
+                mask[i] = torch.flip(mask[i], (3,))
+                iv_imgs[i] = torch.flip(iv_imgs[i], (2,))
+        for i in range(len(rv_imgs)):
+            if self.rng.rand() < self.flip_p:
+                rv_imgs[i] = torch.flip(rv_imgs[i], (2,))
+
+        indices = self.rng.randint(0, self.num_mask, (iv_imgs.shape[0],))
+        selected_mask = torch.stack([mask[i, indices[i]]
+                                  for i in range(iv_imgs.shape[0])])
+        if self.mask_ds is not None:
+            random_masks = torch.stack([self.mask_ds.sample(self.rng)
+                for _ in range(iv_imgs.shape[0])])
+        else:
+            random_masks = selected_mask
+        temps = [self._sample_prompt_temp(i) for i in all_indices]
         return {"infer_image": iv_imgs,
                 "ref_image": rv_imgs,
                 "infer_mask": mask,
-                "all_indice": iv_indices + rv_indices,
+                "random_mask": (random_masks + selected_mask).clamp(max=1),
+                "all_indice": all_indices,
+                "all_file": all_files,
+                "prompt_template": temps,
                 "id": id_idx}
-
-
-class RTMCelebAHQIDIDataset(CelebAHQIDIDataset):
-    """Add random masks and language to images."""
-    def __init__(self, flip_p=0.5, special_token="*",
-            prmopt_templates=PROMPT_TEMPLATES_LARGE,
-            load_id_feat=False,
-            *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.flip_p = flip_p
-        self.special_token = special_token
-        self.templates = prmopt_templates
-        self.to_tensor = ToTensor()
-        self.mask_ds = RandomMaskDataset(size=self.size)
-        self.load_id_feat = load_id_feat
-        if load_id_feat:
-            self.id_feat = torch.load(f"{self.data_dir}/annotation/id_feat.pth", map_location="cpu")
-
-    def __len__(self):
-        return super().__len__()
-
-    def __getitem__(self, index):
-        """
-        Args:
-            iv_imgs: inference images.
-            iv_masks: The semantic inpainting mask. Used in official testing.
-            random_masks: Randomly generated masks. Used in training.
-            id_feats: The face identity features of reference images.
-                      Used for saving computation.
-            rv_imgs: The reference images.
-            p_names: The short-hand name of prompts.
-            prompts: Randomly generated prompts.
-        """
-        data = super().__getitem__(index)
-        n_infer = data["infer_image"].shape[0]
-        random_masks = torch.stack([
-            self.mask_ds.sample() for _ in range(n_infer)])
-        p_names = [np.random.choice(list(self.templates.keys()))
-            for _ in range(n_infer)]
-        prompts = [self.templates[key].format(self.special_token)
-            for key in p_names]
-        data.update({
-            "random_mask": random_masks, # (n_infer, 3, H, W)
-            "p_name": p_names, "prompt": prompts})
-        # The feature from reference images
-        if self.load_id_feat:
-            data["ref_id_feat"] = self.id_feat[data["all_indice"][n_infer:]]
-            data["infer_id_feat"] = self.id_feat[data["all_indice"][:n_infer]]
-        return data
 
 
 class IDInpaintDataset(torch.utils.data.Dataset):
@@ -253,7 +374,7 @@ class IDInpaintDataset(torch.utils.data.Dataset):
                 invalid_indices = [i for i in indices if keep != i]
                 self.non_duplicate[invalid_indices] = False
 
-        with open(f"{data_dir}/annotation/celebahq_id2file.json", "r") as f:
+        with open(f"{data_dir}/annotation/id2file.json", "r") as f:
             self.id_ann = json.load(f)
         ids = list(self.id_ann.keys())
         self.ids = [i for i in ids if self._check_valid_id(self.id_ann[i])]
