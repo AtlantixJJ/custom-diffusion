@@ -60,6 +60,8 @@ if __name__ == "__main__":
         help="The strength of guidance.")
     parser.add_argument("--prompt_set", type=str, default="small",
         help="small / control")
+    parser.add_argument("--rank", type=str, default="0/1",
+        help="local rank / total rank")
     args = parser.parse_args()
 
     if os.path.exists(f"{args.expr_dir}/inv_gen"):
@@ -92,6 +94,9 @@ if __name__ == "__main__":
         prompt = prompt_temp.format("a <new1> person")
         print(f"=> ({p_i}/{len(prompt_temps)}) {prompt}")
         col_imgs = []
+        iv_masks = batch["infer_mask"][:, :, :1].cuda()
+        random_masks = batch["random_mask"][:iv_masks.shape[0], None, :1]
+        iv_masks = torch.cat([iv_masks, random_masks.cuda()], 1)
         for i, image in enumerate(batch["infer_image"]):
             id_idx = batch["id"]
             image_idx = batch["all_indice"][i]

@@ -7,11 +7,11 @@ expr_dirs.sort()
 cmd = "python3 src/sample_diffuser_inpaint.py --expr-dir {expr_dir} --guidance-scale {guidance_scale} --result-dir1 ../../data/celebahq/SDI_CD_{guidance_scale}"
 cmds = []
 for expr_dir in expr_dirs:
-    for guidance_scale in [1, 7.5]:
+    for guidance_scale in [1, 6]:
         cmds.append(cmd.format(data_dir=data_dir,
             expr_dir=expr_dir, guidance_scale=guidance_scale))
 
-gpus = [3]
+gpus = [0, 1, 2, 3, 4, 5]
 slots = [[] for _ in gpus]
 for i, cmd in enumerate(cmds):
     gpu_cmd = f"CUDA_VISIBLE_DEVICES={gpus[i % len(gpus)]} {cmd}"
