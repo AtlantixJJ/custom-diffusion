@@ -60,6 +60,8 @@ if __name__ == "__main__":
         help="The strength of guidance.")
     parser.add_argument("--prompt_set", type=str, default="small",
         help="small / control")
+    parser.add_argument("--rank", type=str, default="0/1",
+        help="local rank / total rank")
     args = parser.parse_args()
 
     if os.path.exists(f"{args.expr_dir}/inv_gen"):
@@ -81,7 +83,8 @@ if __name__ == "__main__":
 
     person_id = int(args.expr_dir[args.expr_dir.rfind("/")+1:])
     test_ds = CelebAHQIDIDataset(size=(512, 512),
-        split="all", loop_data="identity", single_id=person_id)
+        split="all", loop_data="identity", single_id=person_id,
+        inpaint_region=["lowerface", "eyebrow", "wholeface"])
     batch = test_ds[0]
 
     prompt_temps = PROMPT_TEMPLATES_SMALL if args.prompt_set == "small" \
@@ -91,11 +94,14 @@ if __name__ == "__main__":
         prompt = prompt_temp.format("a <new1> person")
         print(f"=> ({p_i}/{len(prompt_temps)}) {prompt}")
         col_imgs = []
+        iv_masks = batch["infer_mask"][:, :, :1].cuda()
+        random_masks = batch["random_mask"][:iv_masks.shape[0], None, :1]
+        iv_masks = torch.cat([iv_masks, random_masks.cuda()], 1)
         for i, image in enumerate(batch["infer_image"]):
             id_idx = batch["id"]
             n = batch["all_indice"][i]
             image = image.unsqueeze(0).cuda()
-            for j, mask in enumerate(batch["infer_mask"][i]):
+            for j, mask in enumerate(iv_masks[i]):
                 mask = mask[None, :1].cuda()
                 masked_image = (image * 2 - 1).cuda() * (1 - mask)
                 p_img = generate_given_prompt(pipe,
